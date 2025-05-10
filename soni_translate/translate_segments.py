@@ -7,10 +7,14 @@ from .logging_setup import logger
 import re
 import json
 import time
+import os
+import openai
 
 TRANSLATION_PROCESS_OPTIONS = [
     "google_translator_batch",
     "google_translator",
+    "gemini-1.5-pro_batch",
+    "gemini-1.5-pro",
     "gpt-3.5-turbo-0125_batch",
     "gpt-3.5-turbo-0125",
     "gpt-4-turbo-preview_batch",
@@ -19,6 +23,7 @@ TRANSLATION_PROCESS_OPTIONS = [
 ]
 DOCS_TRANSLATION_PROCESS_OPTIONS = [
     "google_translator",
+    "gemini-1.5-pro",
     "gpt-3.5-turbo-0125",
     "gpt-4-turbo-preview",
     "disable_translation",
@@ -418,6 +423,206 @@ def gpt_batch(segments, model, target, token_batch_limit=900, source=None):
     )
 
 
+def gemini_sequential(segments, model, target, source=None):
+    """
+    Translate text segments sequentially using Google's Gemini API.
+
+    Parameters:
+    - segments (list): A list of dictionaries with 'text' as a key for segment text.
+    - model (str): The Gemini model to use (e.g., "gemini-1.5-pro").
+    - target (str): Target language code.
+    - source (str, optional): Source language code. Defaults to None.
+
+    Returns:
+    - list: Translated text segments in the target language.
+    """
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        logger.error(
+            "Gemini requires the google-generativeai package. "
+            "Install it with: pip install google-generativeai"
+        )
+        return translate_iterative(segments, target, source)
+
+    if not os.environ.get("GEMINI_API_KEY"):
+        logger.error("Gemini API key not found. Please set GEMINI_API_KEY environment variable.")
+        return translate_iterative(segments, target, source)
+
+    # Configure the Gemini API
+    genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
+    segments_copy = copy.deepcopy(segments)
+    target_name = INVERTED_LANGUAGES.get(target, target)
+    source_name = INVERTED_LANGUAGES.get(source, source if source else "auto")
+
+    for line_num, segment in enumerate(tqdm(segments_copy, desc="Translating with Gemini")):
+        text = segment["text"].strip()
+        
+        system_prompt = (
+            f"You are an expert translator. Translate the following text from "
+            f"{source_name} to {target_name}. Maintain the tone, style, "
+            f"and meaning of the original text. Only provide the translation, "
+            f"no explanations or additional text."
+        )
+        
+        try:
+            model_obj = genai.GenerativeModel(model)
+            response = model_obj.generate_content(
+                [
+                    system_prompt,
+                    text
+                ]
+            )
+            
+            translated_text = response.text.strip()
+            segments_copy[line_num]["text"] = translated_text
+            logger.debug(f"{text} >> {translated_text}")
+            
+        except Exception as error:
+            logger.error(f"Error with Gemini API: {str(error)}")
+            logger.warning("Falling back to Google Translate for this segment")
+            translator = GoogleTranslator(source=source if source else "auto", target=target)
+            segments_copy[line_num]["text"] = translator.translate(text)
+    
+    return segments_copy
+
+
+def gemini_batch(segments, model, target, token_batch_limit=1000, source=None):
+    """
+    Translate a batch of text segments using Google's Gemini API.
+
+    Parameters:
+    - segments (list): A list of dictionaries with 'text' as a key for segment text.
+    - model (str): The Gemini model to use (e.g., "gemini-1.5-pro").
+    - target (str): Target language code.
+    - token_batch_limit (int, optional): Maximum number of tokens for each batch.
+    - source (str, optional): Source language code. Defaults to None.
+
+    Returns:
+    - list: Translated text segments in the target language.
+    """
+    try:
+        import google.generativeai as genai
+        import json
+    except ImportError:
+        logger.error(
+            "Gemini requires the google-generativeai package. "
+            "Install it with: pip install google-generativeai"
+        )
+        return translate_iterative(segments, target, source)
+
+    if not os.environ.get("GEMINI_API_KEY"):
+        logger.error("Gemini API key not found. Please set GEMINI_API_KEY environment variable.")
+        return translate_iterative(segments, target, source)
+
+    # Configure the Gemini API
+    genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
+    segments_copy = copy.deepcopy(segments)
+    target_name = INVERTED_LANGUAGES.get(target, target)
+    source_name = INVERTED_LANGUAGES.get(source, source if source else "auto")
+    
+    # Batch segments
+    batches = []
+    current_batch = []
+    current_token_count = 0
+    
+    for segment in segments:
+        text = segment["text"].strip()
+        # Rough token estimation (each word is ~1.3 tokens)
+        estimated_tokens = len(text.split()) * 1.3
+        
+        if current_token_count + estimated_tokens > token_batch_limit and current_batch:
+            batches.append(current_batch)
+            current_batch = []
+            current_token_count = 0
+        
+        current_batch.append(text)
+        current_token_count += estimated_tokens
+    
+    if current_batch:
+        batches.append(current_batch)
+    
+    # Process each batch
+    all_translations = []
+    for batch_idx, batch in enumerate(tqdm(batches, desc="Translating batches with Gemini")):
+        batch_json = json.dumps({"texts": batch})
+        
+        system_prompt = (
+            f"You are an expert translator. Translate the following texts from "
+            f"{source_name} to {target_name}. Maintain the tone, style, "
+            f"and meaning of the original texts. "
+            f"Return ONLY a JSON object with the key 'translations' containing "
+            f"an array of translated strings in the same order as the input."
+        )
+        
+        prompt = (
+            f"Translate the following texts to {target_name}:\n"
+            f"{batch_json}\n\n"
+            f"Return only a JSON object with the key 'translations' containing the translated texts."
+        )
+        
+        try:
+            model_obj = genai.GenerativeModel(model)
+            response = model_obj.generate_content([system_prompt, prompt])
+            
+            response_text = response.text
+            # Extract JSON from response
+            try:
+                json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
+                if json_match:
+                    response_text = json_match.group(1)
+                else:
+                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if json_match:
+                        response_text = json_match.group(0)
+                
+                translations_data = json.loads(response_text)
+                batch_translations = translations_data.get("translations", [])
+                
+                if len(batch_translations) != len(batch):
+                    logger.warning(
+                        f"Batch {batch_idx}: Expected {len(batch)} translations, "
+                        f"got {len(batch_translations)}. "
+                        f"Using sequential translation for this batch."
+                    )
+                    # Fall back to sequential translation for this batch
+                    batch_segments = [{"text": text} for text in batch]
+                    translated_batch = gemini_sequential(batch_segments, model, target, source)
+                    batch_translations = [segment["text"] for segment in translated_batch]
+                
+                all_translations.extend(batch_translations)
+                
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"Error parsing Gemini response: {str(e)}")
+                logger.warning(f"Response was: {response_text}")
+                logger.warning("Using sequential translation for this batch")
+                batch_segments = [{"text": text} for text in batch]
+                translated_batch = gemini_sequential(batch_segments, model, target, source)
+                all_translations.extend([segment["text"] for segment in translated_batch])
+                
+        except Exception as error:
+            logger.error(f"Error with Gemini API batch {batch_idx}: {str(error)}")
+            logger.warning("Falling back to sequential translation for this batch")
+            batch_segments = [{"text": text} for text in batch]
+            translated_batch = gemini_sequential(batch_segments, model, target, source)
+            all_translations.extend([segment["text"] for segment in translated_batch])
+    
+    # Update segments with translations
+    if len(all_translations) != len(segments_copy):
+        logger.warning(
+            f"Translation count mismatch: {len(all_translations)} translations for "
+            f"{len(segments_copy)} segments. Falling back to sequential translation."
+        )
+        return gemini_sequential(segments, model, target, source)
+    
+    for i, translation in enumerate(all_translations):
+        segments_copy[i]["text"] = translation
+    
+    return segments_copy
+
+
 def translate_text(
     segments,
     target,
@@ -426,32 +631,58 @@ def translate_text(
     source=None,
     token_batch_limit=1000,
 ):
-    """Translates text segments using a specified process."""
-    match translation_process:
-        case "google_translator_batch":
-            return translate_batch(
-                segments,
-                fix_code_language(target),
-                chunk_size,
-                fix_code_language(source)
-            )
-        case "google_translator":
-            return translate_iterative(
-                segments,
-                fix_code_language(target),
-                fix_code_language(source)
-            )
-        case model if model in ["gpt-3.5-turbo-0125", "gpt-4-turbo-preview"]:
-            return gpt_sequential(segments, model, target, source)
-        case model if model in ["gpt-3.5-turbo-0125_batch", "gpt-4-turbo-preview_batch",]:
-            return gpt_batch(
-                segments,
-                translation_process.replace("_batch", ""),
-                target,
-                token_batch_limit,
-                source
-            )
-        case "disable_translation":
-            return segments
-        case _:
-            raise ValueError("No valid translation process")
+    """
+    Translate text based on the specified translation process.
+
+    Parameters:
+    - segments (list): A list of dictionaries with 'text' as a key for segment
+        text.
+    - target (str): Target language code.
+    - translation_process (str, optional): Translation method to use,
+        "google_translator_batch" or "google_translator", default: "google_translator_batch"
+    - chunk_size (int, optional): Maximum character limit for each translation
+        chunk (default is 4500).
+    - source (str, optional): Source language code. Defaults to None.
+    - token_batch_limit (int, optional): Max token limit for the GPT models. Defaults to 1000.
+
+    Returns:
+    - list: Translated text segments in the target language.
+
+    Notes:
+    - Translates text segments using the specified translation process.
+    - Uses either Google Translate (default) or GPT-based models for translation.
+    """
+
+    # import here, to be optional
+    try:
+        import os
+        import openai
+    except ImportError:
+        logger.warning("openai is not installed, gpt options are not available.")
+        logger.warning("Translation process switched to google_translator_batch.")
+        if translation_process == "google_translator":
+            return translate_iterative(segments, target, source)
+        return translate_batch(segments, target, source=source)
+
+    if target == source or translation_process == "disable_translation":
+        return segments
+    elif translation_process == "google_translator":
+        return translate_iterative(segments, target, source)
+    elif translation_process == "google_translator_batch":
+        return translate_batch(segments, target, chunk_size, source)
+    elif "gpt" in translation_process:
+        client = openai.OpenAI()
+        model_name = translation_process.replace("_batch", "")
+        if "_batch" in translation_process:
+            return gpt_batch(segments, model_name, target, token_batch_limit, source)
+        else:
+            return gpt_sequential(segments, model_name, target, source)
+    elif "gemini" in translation_process:
+        model_name = translation_process.replace("_batch", "")
+        if "_batch" in translation_process:
+            return gemini_batch(segments, model_name, target, token_batch_limit, source)
+        else:
+            return gemini_sequential(segments, model_name, target, source)
+    else:
+        logger.error(f"Unknown translation process: {translation_process}")
+        return translate_batch(segments, target, source=source)
