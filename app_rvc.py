@@ -261,10 +261,18 @@ def get_hash(filepath):
 def check_openai_api_key():
     if not os.environ.get("OPENAI_API_KEY"):
         raise ValueError(
-            "To use GPT for translation, please set up your OpenAI API key "
-            "as an environment variable in Linux as follows: "
+            "OpenAI API key not set. Please set it as an environment variable, "
             "export OPENAI_API_KEY='your-api-key-here'. Or change the "
-            "translation process in Advanced settings."
+            "translate_process option to google_translator."
+        )
+
+
+def check_gemini_api_key():
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise ValueError(
+            "Gemini API key not set. Please set it as an environment variable, "
+            "export GEMINI_API_KEY='your-api-key-here'. Or change the "
+            "translate_process option to google_translator."
         )
 
 
@@ -452,6 +460,9 @@ class SoniTranslate(SoniTrCache):
             or "OpenAI-TTS" in tts_voice00
         ):
             check_openai_api_key()
+            
+        if "gemini" in translate_process:
+            check_gemini_api_key()
 
         if media_file is None:
             media_file = (
@@ -2699,8 +2710,8 @@ def create_gui(theme, logs_in_gui=False):
                 volume_original_mix,
                 volume_translated_mix,
                 sub_type_output,
-                dummy_false_check,
-                edit_sub_check,
+                dummy_false_check,  # get_translated_text
+                dummy_false_check,  # get_video_from_text
                 subs_edit_space,
                 avoid_overlap_gui,
                 vocal_refinement_gui,
@@ -2726,40 +2737,47 @@ def create_gui(theme, logs_in_gui=False):
                 workers_custom_voice,
                 is_gui_dummy_check,
             ],
-            outputs=video_output,
-            trigger_mode="multiple",
-        ).then(
-            play_sound_alert, [play_sound_gui], [sound_alert_notification]
+            outputs=[video_output],
+            cache_examples=False,
         )
 
-        # Run docs process
-        docs_button.click(
-            SoniTr.multilingual_docs_conversion,
-            inputs=[
-                text_docs,
-                input_docs,
-                directory_input_docs,
-                docs_SOURCE_LANGUAGE,
-                docs_TRANSLATE_TO,
-                tts_documents,
-                docs_OUTPUT_NAME,
-                docs_translate_process_dropdown,
-                docs_output_type,
-                docs_chunk_size,
-                enable_custom_voice,
-                workers_custom_voice,
-                start_page_gui,
-                end_page_gui,
-                videobook_width_gui,
-                videobook_height_gui,
-                videobook_bcolor_gui,
-                docs_dummy_check,
-            ],
-            outputs=docs_output,
-            trigger_mode="multiple",
-        ).then(
-            play_sound_alert, [play_sound_gui], [sound_alert_notification]
-        )
+        if logs_in_gui:
+            logger.info("Logs in gui need public url")
+
+            class Logger:
+                def __init__(self, filename):
+                    self.terminal = sys.stdout
+                    self.log = open(filename, "w")
+
+                def write(self, message):
+                    self.terminal.write(message)
+                    self.log.write(message)
+
+                def flush(self):
+                    self.terminal.flush()
+                    self.log.flush()
+
+                def isatty(self):
+                    return False
+
+            sys.stdout = Logger("output.log")
+
+            def read_logs():
+                sys.stdout.flush()
+                with open("output.log", "r") as f:
+                    return f.read()
+
+            with gr.Accordion("Logs", open=False):
+                logs = gr.Textbox(label=">>>")
+                app.load(read_logs, None, logs, every=1)
+
+        # Update tts list function for use in main tab
+        def update_tts_list():
+            update_dict = {
+                f"tts_voice{i:02d}": gr.update(choices=SoniTr.tts_info.tts_list())
+                for i in range(MAX_TTS)
+            }
+            return [value for value in update_dict.values()]
 
     return app
 
