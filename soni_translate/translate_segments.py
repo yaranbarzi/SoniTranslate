@@ -13,8 +13,8 @@ import openai
 TRANSLATION_PROCESS_OPTIONS = [
     "google_translator_batch",
     "google_translator",
-    "gemini-1.5-pro_batch",
-    "gemini-1.5-pro",
+    "gemini-1.5-flash_batch",
+    "gemini-1.5-flash",
     "gpt-3.5-turbo-0125_batch",
     "gpt-3.5-turbo-0125",
     "gpt-4-turbo-preview_batch",
@@ -23,7 +23,7 @@ TRANSLATION_PROCESS_OPTIONS = [
 ]
 DOCS_TRANSLATION_PROCESS_OPTIONS = [
     "google_translator",
-    "gemini-1.5-pro",
+    "gemini-1.5-flash",
     "gpt-3.5-turbo-0125",
     "gpt-4-turbo-preview",
     "disable_translation",
@@ -425,16 +425,20 @@ def gpt_batch(segments, model, target, token_batch_limit=900, source=None):
 
 def gemini_sequential(segments, model, target, source=None):
     """
-    Translate text segments sequentially using Google's Gemini API.
+    Translate text segments sequentially using the Gemini model API.
 
     Parameters:
     - segments (list): A list of dictionaries with 'text' as a key for segment text.
-    - model (str): The Gemini model to use (e.g., "gemini-1.5-pro").
+    - model (str): The Gemini model to use (e.g., "gemini-1.5-flash").
     - target (str): Target language code.
     - source (str, optional): Source language code. Defaults to None.
 
     Returns:
     - list: Translated text segments in the target language.
+
+    Notes:
+    - Translates each segment using the Gemini API.
+    - Uses gpt_sequential as a fallback if Gemini translation fails.
     """
     try:
         import google.generativeai as genai
@@ -490,17 +494,22 @@ def gemini_sequential(segments, model, target, source=None):
 
 def gemini_batch(segments, model, target, token_batch_limit=1000, source=None):
     """
-    Translate a batch of text segments using Google's Gemini API.
+    Translate a batch of text segments using the Gemini model API.
 
     Parameters:
     - segments (list): A list of dictionaries with 'text' as a key for segment text.
-    - model (str): The Gemini model to use (e.g., "gemini-1.5-pro").
+    - model (str): The Gemini model to use (e.g., "gemini-1.5-flash")
     - target (str): Target language code.
-    - token_batch_limit (int, optional): Maximum number of tokens for each batch.
+    - token_batch_limit (int, optional): Maximum token limit for each batch
+        (default is 1000).
     - source (str, optional): Source language code. Defaults to None.
 
     Returns:
     - list: Translated text segments in the target language.
+
+    Notes:
+    - Batches segments to optimize Gemini API calls.
+    - Uses batch or sequential fallbacks if primary method fails.
     """
     try:
         import google.generativeai as genai
