@@ -27,11 +27,10 @@ optimum
 sentencepiece
 srt
 onnxruntime-gpu
-git+https://github.com/R3gm/openvoice_package.git@lite
+git+https://github.com/yaranbarzi/openvoice_package.git@lite
 # Documents
 PyPDF2
 python-docx
 
 # after this
 # pip install git+https://github.com/omry/omegaconf.git@refs/pull/1137/merge
-
