@@ -4,7 +4,7 @@
 
 SonyTranslate is a powerful and user-friendly web application that allows you to easily translate videos into different languages. This repository hosts the code for the SonyTranslate web UI, which is built with the Gradio library to provide a seamless and interactive user experience.
 
-| 📙 API Notebook | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yaranbarzi/SoniTranslate/blob/main/Sonitranslate_API.ipynb) |
+📙 API Notebook | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yaranbarzi/SoniTranslate/blob/main/Sonitranslate_API.ipynb)
 
 
 | Description | Link |
